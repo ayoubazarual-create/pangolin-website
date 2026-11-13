@@ -217,61 +217,94 @@
   }
 })();
 
-/* ---------- De binder: rits open, kaft open ---------- */
+/* ---------- De binder: sleep de rits open, de kaft volgt ---------- */
 (function () {
   'use strict';
   var binder = document.getElementById('binder3d');
+  var cover = binder && binder.querySelector('.b-cover');
+  var svg = binder && binder.querySelector('.b-zip');
   var path = document.getElementById('zipPath');
   var pull = document.getElementById('zipPull');
   var btn = document.getElementById('zipBtn');
-  if (!binder || !path || !pull || !btn) return;
+  if (!binder || !cover || !svg || !path || !pull || !btn) return;
 
   var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   var len = path.getTotalLength();
-  var pos = 0;        // 0 = rits dicht, 1 = rits open
-  var open = false, busy = false;
+  var N = 240, samples = [];
+  for (var i = 0; i <= N; i++) samples.push(path.getPointAtLength(len * i / N));
 
-  function place(t) {
-    var d = t * len;
+  var pos = 0;              // 0 = rits dicht, 1 = rits open
+  var busy = false, dragging = false, moved = false, startX = 0, startY = 0;
+  var OPEN_FROM = 0.55;     // vanaf hier begint de kaft open te draaien
+
+  function render() {
+    var d = pos * len;
     var p = path.getPointAtLength(d);
     var q = path.getPointAtLength(Math.min(len, d + 1)), o = path.getPointAtLength(Math.max(0, d - 1));
     var ang = Math.atan2(q.y - o.y, q.x - o.x) * 180 / Math.PI;
     pull.setAttribute('transform', 'translate(' + p.x.toFixed(1) + ' ' + p.y.toFixed(1) + ') rotate(' + ang.toFixed(1) + ')');
+    var k = Math.max(0, Math.min(1, (pos - OPEN_FROM) / (1 - OPEN_FROM)));
+    k = k * k * (3 - 2 * k);
+    cover.style.transform = 'rotateY(' + (-112 * k).toFixed(2) + 'deg)';
+    binder.style.transform = 'translateX(' + (13 * k).toFixed(2) + '%) scale(' + (1 - 0.16 * k).toFixed(3) + ')';
+    var isOpen = pos > 0.98;
+    btn.textContent = isOpen ? 'Rits dicht' : 'Rits open';
+    btn.setAttribute('aria-pressed', isOpen ? 'true' : 'false');
   }
 
-  function slide(to, done) {
-    if (reduce) { pos = to; place(pos); done(); return; }
-    var from = pos, t0 = null, dur = 1000;
+  function animateTo(to, done) {
+    if (reduce) { pos = to; render(); busy = false; if (done) done(); return; }
+    busy = true;
+    var from = pos, t0 = null, dur = 300 + 1400 * Math.abs(to - from);
     function step(now) {
       if (t0 === null) t0 = now;
       var k = Math.min(1, (now - t0) / dur);
       var e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
-      pos = from + (to - from) * e; place(pos);
-      if (k < 1) requestAnimationFrame(step); else done();
+      pos = from + (to - from) * e; render();
+      if (k < 1) requestAnimationFrame(step); else { busy = false; if (done) done(); }
     }
     requestAnimationFrame(step);
   }
 
-  function toggle() {
-    if (busy) return;
-    busy = true;
-    if (!open) {
-      slide(1, function () {
-        binder.classList.add('open'); open = true; busy = false;
-        btn.textContent = 'Rits dicht'; btn.setAttribute('aria-pressed', 'true');
-      });
-    } else {
-      binder.classList.remove('open');
-      setTimeout(function () {
-        slide(0, function () {
-          open = false; busy = false;
-          btn.textContent = 'Rits open'; btn.setAttribute('aria-pressed', 'false');
-        });
-      }, reduce ? 0 : 900);
+  function toggle() { if (!busy) animateTo(pos > 0.5 ? 0 : 1); }
+
+  // muis of vinger naar de dichtstbijzijnde plek op de rits
+  function nearest(clientX, clientY) {
+    var m = svg.getScreenCTM();
+    if (!m) return pos;
+    var pt = svg.createSVGPoint(); pt.x = clientX; pt.y = clientY;
+    var loc = pt.matrixTransform(m.inverse());
+    var cur = Math.round(pos * N), best = cur, bd = 1e12;
+    var lo = Math.max(0, cur - 40), hi = Math.min(N, cur + 40);   // geen sprongen over de binder heen
+    for (var j = lo; j <= hi; j++) {
+      var dx = samples[j].x - loc.x, dy = samples[j].y - loc.y, d2 = dx * dx + dy * dy;
+      if (d2 < bd) { bd = d2; best = j; }
     }
+    return best / N;
   }
 
-  place(0);
+  pull.addEventListener('pointerdown', function (e) {
+    if (busy) return;
+    dragging = true; moved = false; startX = e.clientX; startY = e.clientY;
+    binder.classList.add('dragging');
+    try { pull.setPointerCapture(e.pointerId); } catch (err) {}
+    e.preventDefault();
+  });
+  pull.addEventListener('pointermove', function (e) {
+    if (!dragging) return;
+    if (!moved && Math.abs(e.clientX - startX) + Math.abs(e.clientY - startY) < 5) return;
+    moved = true;
+    pos = nearest(e.clientX, e.clientY); render();
+  });
+  function end() {
+    if (!dragging) return;
+    dragging = false; binder.classList.remove('dragging');
+    if (!moved) { toggle(); return; }
+    animateTo(pos > 0.5 ? 1 : 0);          // loslaten: klikt vast in open of dicht
+  }
+  pull.addEventListener('pointerup', end);
+  pull.addEventListener('pointercancel', end);
+
   btn.addEventListener('click', toggle);
-  pull.addEventListener('click', toggle);
+  render();
 })();
