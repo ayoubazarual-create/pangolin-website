@@ -41,178 +41,217 @@
   var ctx = canvas.getContext('2d');
   var stage = canvas.parentElement;
 
-  var L = 440;          // lengte van de ruggengraat
-  var W = 118;          // maximale dikte van het lichaam
-  var COLS = 19, ROWS = 5;
-  var TH_OPEN = 0.8;    // lichte boog: wandelhouding
-  var TH_BALL = 7.6;    // meer dan een volledige cirkel: opgerold
+  var L = 520, N = 170;           // lengte van de ruggengraat, aantal meetpunten
+  var TH0 = 0.62, TH1 = 8.0;      // totale kromming: wandelend en opgerold
+  var COLS = 15, ROWS = 4;
 
-  // vaste "willekeur" zodat dezelfde schubben oranje zijn
-  var hot = {};
-  [[3, 4], [5, 2], [7, 4], [8, 3], [10, 1], [11, 4], [13, 3], [15, 4], [16, 2], [6, 0]].forEach(function (p) { hot[p[0] + '_' + p[1]] = 1; });
+  function sm(t) { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); }
+  function easeIO(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
+  function easeOut(t) { return 1 - Math.pow(1 - Math.max(0, Math.min(1, t)), 3); }
 
-  function widthAt(u) {            // u: 0 = kop, 1 = staartpunt
-    if (u < 0.14) return W * (0.42 + 0.58 * Math.sin((u / 0.14) * Math.PI / 2));
-    if (u < 0.55) return W;
-    var k = (u - 0.55) / 0.45;
-    return W * (1 - 0.86 * Math.pow(k, 1.15));
+  // halve dikte van het lichaam: u = 0 snuit, u = 1 staartpunt
+  function hw(u) {
+    if (u < 0.12) return 7 + 23 * Math.pow(u / 0.12, 0.8);
+    if (u < 0.34) return 30 + 36 * sm((u - 0.12) / 0.22);
+    if (u < 0.52) return 66 - 20 * sm((u - 0.34) / 0.18);
+    return 46 - 39 * Math.pow((u - 0.52) / 0.48, 0.9);
   }
 
-  function buildSpine(theta) {
-    var n = 240, pts = [], x = 0, y = 0, ds = L / n, kappa = theta / L;
-    var minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
-    for (var i = 0; i <= n; i++) {
-      var s = i * ds, phi = -theta / 2 + kappa * s;
-      var w = widthAt(i / n);
-      var nx = Math.sin(phi), ny = -Math.cos(phi);
-      pts.push({ x: x, y: y, nx: nx, ny: ny, tx: Math.cos(phi), ty: Math.sin(phi) });
-      var ox = x + nx * w, oy = y + ny * w;
-      minX = Math.min(minX, x, ox); maxX = Math.max(maxX, x, ox);
-      minY = Math.min(minY, y, oy); maxY = Math.max(maxY, y, oy);
-      x += Math.cos(phi + kappa * ds / 2) * ds;
-      y += Math.sin(phi + kappa * ds / 2) * ds;
+  function build(c, roll) {
+    var pts = [], x = 0, y = 0, phi = 0, ds = L / N, i, u;
+    for (i = 0; i <= N; i++) {
+      u = i / N;
+      var lead = sm(c * 1.5 - 0.5 * (1 - Math.abs(2 * u - 1)));   // kop en staart krullen eerst
+      var kap = (TH0 + (TH1 - TH0) * lead) / L;
+      pts.push({ x: x, y: y, phi: phi, kap: kap });
+      x += Math.cos(phi + kap * ds / 2) * ds;
+      y += Math.sin(phi + kap * ds / 2) * ds;
+      phi += kap * ds;
     }
-    return { pts: pts, n: n, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, maxY: maxY };
+    // schouders horizontaal zetten, daarna de rol toepassen
+    var rot = roll - pts[Math.round(N * 0.36)].phi;
+    var cs = Math.cos(rot), sn = Math.sin(rot);
+    var minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+    for (i = 0; i <= N; i++) {
+      var p = pts[i], px = p.x * cs - p.y * sn, py = p.x * sn + p.y * cs;
+      p.x = px; p.y = py; p.phi += rot;
+      p.nx = Math.sin(p.phi); p.ny = -Math.cos(p.phi);
+      var h = hw(i / N), reach = 0.97 / p.kap, b = Math.min(reach, h * 0.7 + (reach - h * 0.7) * sm((c - 0.45) / 0.5));
+      p.h = h; p.b = b;
+      var ax = px + p.nx * h, ay = py + p.ny * h, bx = px - p.nx * b, by = py - p.ny * b;
+      minX = Math.min(minX, ax, bx); maxX = Math.max(maxX, ax, bx);
+      minY = Math.min(minY, ay, by); maxY = Math.max(maxY, ay, by);
+    }
+    return { pts: pts, minX: minX, maxX: maxX, minY: minY, maxY: maxY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
   }
 
-  function at(sp, u, r) {          // punt op u langs de rug, r naar buiten
+  // punt op het lichaam: v = 1 rug, v = -1 buik
+  function at(sp, u, v) {
     u = Math.max(0, Math.min(1, u));
-    var f = u * sp.n, i = Math.floor(f), t = f - i;
-    var a = sp.pts[i], b = sp.pts[Math.min(sp.n, i + 1)];
-    return {
-      x: a.x + (b.x - a.x) * t + (a.nx + (b.nx - a.nx) * t) * r,
-      y: a.y + (b.y - a.y) * t + (a.ny + (b.ny - a.ny) * t) * r
-    };
+    var f = u * N, i = Math.min(N - 1, Math.floor(f)), t = f - i, a = sp.pts[i], b = sp.pts[i + 1];
+    var off = v >= 0 ? v * (a.h + (b.h - a.h) * t) : v * (a.b + (b.b - a.b) * t);
+    return { x: a.x + (b.x - a.x) * t + (a.nx + (b.nx - a.nx) * t) * off, y: a.y + (b.y - a.y) * t + (a.ny + (b.ny - a.ny) * t) * off };
   }
 
-  function plate(sp, c, r) {
-    var u0 = c / COLS, half = 0.5 / COLS;
-    var off = (r % 2) ? half : 0;                 // rijen verspringen, zoals dakpannen
-    var uA = u0 + off, uB = uA + 1.85 / COLS;
-    if (uA > 0.985) return;
-    var wA = widthAt(Math.min(1, uA)), wB = widthAt(Math.min(1, uB));
-    var r0 = r / ROWS, r1 = (r + 1.45) / ROWS, rm = (r0 + Math.min(1, r1)) / 2;
-    r1 = Math.min(1.04, r1);
-    var p = [
-      at(sp, uA, wA * r0),
-      at(sp, uA, wA * r1 * 0.96),
-      at(sp, uA + (uB - uA) * 0.62, wA * r1),
-      at(sp, uB, wB * rm),                        // punt wijst naar de staart
-      at(sp, uA + (uB - uA) * 0.62, wA * r0)
-    ];
+  var curlNow = 0;
+  function scale(sp, c, r) {
+    var du = 0.9 / COLS, uA = 0.095 + c * du + (r % 2 ? du / 2 : 0), uB = Math.min(1, uA + du * 1.95);
+    if (uA > 0.965) return;
+    var vmin = -0.34 - 0.62 * sm(curlNow), step = (1.0 - vmin) / ROWS;
+    var v0 = vmin + r * step, v1 = Math.min(1.04, v0 + step * 1.55), vm = (v0 + v1) / 2, um = uA + (uB - uA) * 0.7;
+    var p0 = at(sp, uA, v0), p1 = at(sp, uA, v1), tip = at(sp, uB, vm);
+    var c1 = at(sp, um, v1 + 0.1), c0 = at(sp, um, v0 - 0.1), base = at(sp, uA, vm);
     ctx.beginPath();
-    ctx.moveTo(p[0].x, p[0].y);
-    for (var i = 1; i < p.length; i++) ctx.lineTo(p[i].x, p[i].y);
+    ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y);
+    ctx.quadraticCurveTo(c1.x, c1.y, tip.x, tip.y);
+    ctx.quadraticCurveTo(c0.x, c0.y, p0.x, p0.y);
     ctx.closePath();
-    var isHot = hot[c + '_' + r];
-    ctx.fillStyle = isHot ? ORANGE : (r === ROWS - 1 ? '#232323' : '#1a1a1a');
-    ctx.fill();
-    ctx.strokeStyle = isHot ? '#ff7a3d' : 'rgba(242,239,233,' + (0.16 + 0.1 * r) + ')';
-    ctx.lineWidth = 1.4;
-    ctx.stroke();
+    var g = ctx.createLinearGradient(base.x, base.y, tip.x, tip.y);
+    g.addColorStop(0, '#111111'); g.addColorStop(0.5, '#222222'); g.addColorStop(1, r === ROWS - 1 ? '#565656' : '#444444');
+    ctx.fillStyle = g; ctx.fill();
+    ctx.strokeStyle = 'rgba(242,239,233,.3)'; ctx.lineWidth = 1.1; ctx.stroke();
+    // nerf in het midden van de schub
+    ctx.beginPath(); ctx.moveTo(base.x + (tip.x - base.x) * 0.35, base.y + (tip.y - base.y) * 0.35); ctx.lineTo(tip.x, tip.y);
+    ctx.strokeStyle = 'rgba(242,239,233,.07)'; ctx.stroke();
   }
 
-  function draw(curl, roll, bob) {
+  function outline(sp, uFrom, uTo, v, steps) {
+    for (var i = 0; i <= steps; i++) { var q = at(sp, uFrom + (uTo - uFrom) * i / steps, v); if (i) ctx.lineTo(q.x, q.y); else ctx.moveTo(q.x, q.y); }
+  }
+
+  function leg(sp, u, phase, far, walk, hide, groundY) {
+    if (hide >= 1) return;
+    var hip = at(sp, u, -0.55);
+    var len = Math.max(18, Math.min(130, groundY - hip.y)) * (1 - hide);
+    var sw = Math.sin(phase) * 0.42 * walk, lift = Math.max(0, Math.cos(phase)) * 7 * walk;
+    ctx.save(); ctx.translate(hip.x, hip.y); ctx.rotate(sw);
+    ctx.beginPath();
+    ctx.moveTo(-19, -10); ctx.lineTo(19, -10); ctx.lineTo(11, len - 9 - lift); ctx.lineTo(-22, len - lift);
+    ctx.lineTo(-25, len - 9 - lift); ctx.lineTo(-13, len - 13 - lift); ctx.closePath();
+    ctx.fillStyle = far ? '#121212' : '#1f1f1f'; ctx.fill();
+    ctx.strokeStyle = 'rgba(242,239,233,' + (far ? 0.1 : 0.22) + ')'; ctx.lineWidth = 1.2; ctx.stroke();
+    ctx.restore();
+  }
+
+  function draw(c, roll, opt) {
     var dpr = Math.min(window.devicePixelRatio || 1, 2);
     var size = canvas.clientWidth;
+    if (!size) return;
     if (canvas.width !== Math.round(size * dpr)) { canvas.width = canvas.height = Math.round(size * dpr); }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, size, size);
 
-    var theta = TH_OPEN + (TH_BALL - TH_OPEN) * curl;
-    var sp = buildSpine(theta);
-    var scale = size / 640;
-    var groundY = size * 0.74;
+    curlNow = c;
+    var sp = build(c, roll);
+    var k = size / 570 * (1 + 0.42 * c);
+    var groundY = size * 0.76;
+    var legShow = 1 - sm(c * 3.2);
+    var lift = 30 * legShow;
+    var ox = size / 2 + (opt.x || 0) * size, oy = groundY - (sp.maxY - sp.cy) * k - lift * k - (opt.bounce || 0) * k;
 
-    // schaduw op de grond
-    var shW = (250 - 110 * curl) * scale;
-    var g = ctx.createRadialGradient(size / 2, groundY, 0, size / 2, groundY, shW);
-    g.addColorStop(0, 'rgba(0,0,0,.55)'); g.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.save(); ctx.translate(0, groundY); ctx.scale(1, 0.16); ctx.translate(0, -groundY);
-    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(size / 2, groundY, shW, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+    // schaduw
+    var shW = Math.max(60, (sp.maxX - sp.minX) / 2 * k * 0.95);
+    var sh = ctx.createRadialGradient(ox, groundY, 0, ox, groundY, shW);
+    sh.addColorStop(0, 'rgba(0,0,0,.6)'); sh.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.save(); ctx.translate(0, groundY); ctx.scale(1, 0.14); ctx.translate(0, -groundY);
+    ctx.fillStyle = sh; ctx.beginPath(); ctx.arc(ox, groundY, shW, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+
+    // schild: zachte oranje ringen zodra hij opgerold is
+    if (opt.shield > 0) {
+      var R = (sp.maxX - sp.minX) / 2 * k;
+      for (var s = 0; s < 2; s++) {
+        var ph = ((opt.time / 3.2) + s * 0.5) % 1;
+        ctx.beginPath(); ctx.arc(ox, oy, R * (1.04 + 0.42 * ph), 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(252,76,2,' + ((1 - ph) * 0.32 * opt.shield).toFixed(3) + ')'; ctx.lineWidth = 2; ctx.stroke();
+      }
+    }
 
     ctx.save();
-    // lichaam staat met zijn laagste punt op de grond
-    ctx.translate(size / 2, groundY - (sp.maxY - sp.cy) * scale - 6 * scale + bob * scale);
-    ctx.rotate(roll);
-    ctx.scale(scale, scale);
-    ctx.translate(-sp.cx, -sp.cy);
-    ctx.lineJoin = 'round';
+    ctx.translate(ox, oy); ctx.scale(k, k); ctx.translate(-sp.cx, -sp.cy);
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    var gY = sp.cy + (groundY - oy) / k;     // grondlijn in lichaamscoördinaten
+    var wp = opt.walkPhase || 0, wk = opt.walk || 0;
 
-    // pootjes (verdwijnen bij het oprollen)
-    var legA = Math.max(0, 1 - curl * 2.2);
-    if (legA > 0) {
-      ctx.globalAlpha = legA;
-      [0.2, 0.29, 0.5, 0.59].forEach(function (u, i) {
-        var a = at(sp, u, 6), sw = Math.sin(bob * 1.4 + i * 1.7) * 5;
-        ctx.beginPath(); ctx.moveTo(a.x - 13, a.y - 6); ctx.lineTo(a.x + 13, a.y - 6);
-        ctx.lineTo(a.x + 7 + sw, a.y + 46); ctx.lineTo(a.x - 13 + sw, a.y + 46); ctx.closePath();
-        ctx.fillStyle = '#1a1a1a'; ctx.fill();
-        ctx.strokeStyle = 'rgba(242,239,233,.22)'; ctx.lineWidth = 1.4; ctx.stroke();
-      });
-      ctx.globalAlpha = 1;
-    }
+    // verste poten
+    if (legShow > 0) { ctx.globalAlpha = legShow; leg(sp, 0.215, wp + Math.PI, true, wk, 1 - legShow, gY); leg(sp, 0.465, wp, true, wk, 1 - legShow, gY); ctx.globalAlpha = 1; }
 
-    // buik: donkere basis onder de schubben
-    ctx.beginPath();
-    for (var i = 0; i <= 60; i++) { var q = at(sp, i / 60, 0); if (i) ctx.lineTo(q.x, q.y); else ctx.moveTo(q.x, q.y); }
-    for (i = 60; i >= 0; i--) { q = at(sp, i / 60, widthAt(i / 60) * 0.9); ctx.lineTo(q.x, q.y); }
-    ctx.closePath(); ctx.fillStyle = '#141414'; ctx.fill();
+    // lichaam: donkere basis (buik en huid)
+    ctx.beginPath(); outline(sp, 0, 1, 1, 70);
+    for (var i = 70; i >= 0; i--) { var q = at(sp, i / 70, -1); ctx.lineTo(q.x, q.y); }
+    ctx.closePath(); ctx.fillStyle = '#161616'; ctx.fill();
+    ctx.strokeStyle = 'rgba(242,239,233,.14)'; ctx.lineWidth = 1.2; ctx.stroke();
+    // opgerold: het midden sluit zich
+    var hole = sm((c - 0.5) / 0.4);
+    if (hole > 0) { ctx.globalAlpha = hole; ctx.beginPath(); outline(sp, 0.05, 0.9, -1, 60); ctx.closePath(); ctx.fillStyle = '#161616'; ctx.fill(); ctx.globalAlpha = 1; }
 
-    // opgerold: de buik sluit zich in het midden
-    var holeA = Math.max(0, Math.min(1, (curl - 0.55) / 0.35));
-    if (holeA > 0) {
-      ctx.globalAlpha = holeA; ctx.beginPath();
-      for (i = 0; i <= 60; i++) { q = at(sp, i / 60, 2); if (i) ctx.lineTo(q.x, q.y); else ctx.moveTo(q.x, q.y); }
-      ctx.closePath(); ctx.fillStyle = '#1b1b1b'; ctx.fill(); ctx.globalAlpha = 1;
-    }
+    // dichtste poten
+    if (legShow > 0) { ctx.globalAlpha = legShow; leg(sp, 0.2, wp, false, wk, 1 - legShow, gY); leg(sp, 0.45, wp + Math.PI, false, wk, 1 - legShow, gY); ctx.globalAlpha = 1; }
 
-    // schubben: van staart naar kop, binnenste rij eerst
-    for (var c = COLS - 1; c >= 1; c--) for (var r = 0; r < ROWS; r++) plate(sp, c, r);
+    // schubben, van staart naar kop
+    for (var col = COLS; col >= 0; col--) for (var r = 0; r < ROWS; r++) scale(sp, col, r);
 
-    // kop met snuit en oog
-    var h0 = sp.pts[0], hw = widthAt(0);
-    // richting van de snuit: vooruit bij het wandelen, naar binnen gedraaid in de bal
-    var dx = -h0.tx * (1 - curl * 0.55) - h0.nx * curl * 0.75, dy = -h0.ty * (1 - curl * 0.55) - h0.ny * curl * 0.75;
-    var dl = Math.sqrt(dx * dx + dy * dy); dx /= dl; dy /= dl;
-    var base0 = at(sp, 0.06, 0), base1 = at(sp, 0.06, hw * 1.02);
-    var mid = { x: h0.x + h0.nx * hw * 0.42, y: h0.y + h0.ny * hw * 0.42 };
-    var tip = { x: mid.x + dx * 78, y: mid.y + dy * 78 };
-    var brow = { x: h0.x + h0.nx * hw * 0.98 + dx * 16, y: h0.y + h0.ny * hw * 0.98 + dy * 16 };
-    var jaw = { x: h0.x + h0.nx * hw * 0.04 + dx * 26, y: h0.y + h0.ny * hw * 0.04 + dy * 26 };
-    ctx.beginPath(); ctx.moveTo(base0.x, base0.y); ctx.lineTo(jaw.x, jaw.y); ctx.lineTo(tip.x, tip.y);
-    ctx.lineTo(brow.x, brow.y); ctx.lineTo(base1.x, base1.y); ctx.closePath();
-    ctx.fillStyle = '#202020'; ctx.fill();
-    ctx.strokeStyle = 'rgba(242,239,233,.4)'; ctx.lineWidth = 1.6; ctx.stroke();
-    var eye = { x: h0.x + h0.nx * hw * 0.66 + dx * 24, y: h0.y + h0.ny * hw * 0.66 + dy * 24 };
-    ctx.beginPath(); ctx.arc(eye.x, eye.y, 4.2, 0, Math.PI * 2); ctx.fillStyle = curl > 0.9 ? ORANGE : CHALK; ctx.fill();
+    // kop: glad, met oog en oor
+    ctx.beginPath(); outline(sp, 0, 0.135, 1, 14);
+    for (i = 14; i >= 0; i--) { q = at(sp, 0.135 * i / 14, -1); ctx.lineTo(q.x, q.y); }
+    ctx.closePath();
+    var nose = at(sp, 0, 0), neck = at(sp, 0.135, 0.4);
+    var hg = ctx.createLinearGradient(nose.x, nose.y, neck.x, neck.y);
+    hg.addColorStop(0, '#3a3a3a'); hg.addColorStop(1, '#1e1e1e');
+    ctx.fillStyle = hg; ctx.fill(); ctx.strokeStyle = 'rgba(242,239,233,.3)'; ctx.lineWidth = 1.3; ctx.stroke();
+    var ear = at(sp, 0.118, 0.5); ctx.beginPath(); ctx.ellipse(ear.x, ear.y, 6, 4, sp.pts[20].phi, 0, Math.PI * 2); ctx.fillStyle = '#101010'; ctx.fill();
+    var eye = at(sp, 0.062, 0.42); ctx.beginPath(); ctx.arc(eye.x, eye.y, 3.4, 0, Math.PI * 2); ctx.fillStyle = CHALK; ctx.fill();
+    ctx.beginPath(); ctx.arc(eye.x + 0.8, eye.y, 1.6, 0, Math.PI * 2); ctx.fillStyle = '#111'; ctx.fill();
+    ctx.beginPath(); ctx.arc(nose.x, nose.y, 3, 0, Math.PI * 2); ctx.fillStyle = '#0c0c0c'; ctx.fill();
+
+    // opgerold: de staart ligt over de kop
+    if (c > 0.5) { ctx.globalAlpha = sm((c - 0.5) / 0.25); for (col = COLS; col >= 10; col--) for (r = 0; r < ROWS; r++) scale(sp, col, r); ctx.globalAlpha = 1; }
+
+    // oranje randlicht langs de rug
+    ctx.beginPath(); outline(sp, 0.13, 0.995, 1.02, 80);
+    ctx.shadowColor = ORANGE; ctx.shadowBlur = 14 * k; ctx.strokeStyle = ORANGE; ctx.lineWidth = 2.2; ctx.stroke();
+    ctx.shadowBlur = 0;
 
     ctx.restore();
   }
 
-  function ease(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
-
-  var state = { curl: 0, target: 1, t0: null, from: 0, started: false };
+  // ---- verloop van de animatie ----
+  var ROLL_END = 2.5;
+  var st = { c: 0, from: 0, to: 0, t0: 0, dur: 1.3, start: null, settled: -1, auto: false };
 
   function frame(now) {
-    if (state.t0 === null) state.t0 = now;
-    var el = (now - state.t0) / 1000;
-    var delay = state.started ? 0 : 0.9, dur = 1.7;
-    var k = Math.max(0, Math.min(1, (el - delay) / dur));
-    state.curl = state.from + (state.target - state.from) * ease(k);
-    var walking = 1 - state.curl;
-    var bob = Math.sin(now / 170) * 2.6 * walking + Math.sin(now / 900) * 1.2 * state.curl;
-    var roll = state.curl * 0.55 + Math.sin(now / 1400) * 0.035 * state.curl;
-    draw(state.curl, roll, bob);
-    if (k >= 1) { state.started = true; stage.classList.add('done'); }
+    now /= 1000;
+    if (st.start === null) st.start = now;
+    var t = now - st.start;
+    var enter = easeOut(t / 1.15);                       // wandelt binnen van rechts
+    if (!st.auto && t > 1.5) { st.auto = true; st.from = 0; st.to = 1; st.t0 = now; }   // daarna rolt hij zich op
+    var kk = st.auto ? Math.min(1, (now - st.t0) / st.dur) : 0;
+    st.c = st.from + (st.to - st.from) * easeIO(kk);
+    if (kk >= 1 && st.settled < 0) st.settled = now;
+    var tau = st.settled < 0 ? 0 : now - st.settled;
+    var c = st.c;
+    var wobble = (st.to === 1 && st.settled >= 0) ? Math.exp(-3.2 * tau) * Math.sin(tau * 8.5) : 0;   // uitrollen en tot rust komen
+    var roll = c * ROLL_END + wobble * 0.22 + Math.sin(now * 0.9) * 0.015 * c;
+    var bounce = (st.to === 1 && st.settled >= 0) ? Math.abs(Math.sin(tau * 7)) * Math.exp(-4.5 * tau) * 12 : 0;
+    var walking = (1 - enter) > 0.02 ? 1 : 0;
+    draw(c, roll, {
+      x: (1 - enter) * 0.62,
+      walkPhase: now * 9, walk: walking * (1 - c),
+      bounce: bounce + Math.sin(now * 2) * 1.2 * (1 - c),
+      shield: (st.to === 1 && st.settled >= 0) ? Math.min(1, tau / 0.8) : 0,
+      time: now
+    });
+    if (st.settled >= 0) stage.classList.add('done');
     requestAnimationFrame(frame);
   }
 
   function toggle() {
-    state.from = state.curl;
-    state.target = state.target === 1 && state.curl > 0.5 ? 0 : 1;
-    state.t0 = null; state.started = true;
-    canvas.setAttribute('aria-label', state.target === 1
+    var now = performance.now() / 1000;
+    if (st.start === null) return;
+    st.auto = true; st.from = st.c; st.to = st.to === 1 ? 0 : 1; st.t0 = now; st.settled = -1;
+    st.dur = 1.1;
+    var hint = stage.querySelector('.hint');
+    if (hint) hint.textContent = st.to === 1 ? 'Klik om te ontrollen' : 'Klik om op te rollen';
+    canvas.setAttribute('aria-label', st.to === 1
       ? 'Animatie: een pangolin rolt zich op tot een beschermde bal.'
       : 'Animatie: de pangolin rolt zich weer open.');
   }
@@ -220,8 +259,9 @@
   canvas.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
 
   if (reduce) {
-    draw(1, 0.55, 0); stage.classList.add('done');
-    window.addEventListener('resize', function () { draw(1, 0.55, 0); });
+    var still = function () { draw(1, ROLL_END, { shield: 0, time: 0 }); };
+    still(); stage.classList.add('done');
+    window.addEventListener('resize', still);
   } else {
     requestAnimationFrame(frame);
   }
