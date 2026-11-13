@@ -243,8 +243,7 @@
     var q = path.getPointAtLength(Math.min(len, d + 1)), o = path.getPointAtLength(Math.max(0, d - 1));
     var ang = Math.atan2(q.y - o.y, q.x - o.x) * 180 / Math.PI;
     pull.setAttribute('transform', 'translate(' + p.x.toFixed(1) + ' ' + p.y.toFixed(1) + ') rotate(' + ang.toFixed(1) + ')');
-    var k = Math.max(0, Math.min(1, (pos - OPEN_FROM) / (1 - OPEN_FROM)));
-    k = k * k * (3 - 2 * k);
+    var k = kOf(pos);
     cover.style.transform = 'rotateY(' + (-112 * k).toFixed(2) + 'deg)';
     binder.style.transform = 'translateX(' + (13 * k).toFixed(2) + '%) scale(' + (1 - 0.16 * k).toFixed(3) + ')';
     var isOpen = pos > 0.98;
@@ -255,11 +254,11 @@
   function animateTo(to, done) {
     if (reduce) { pos = to; render(); busy = false; if (done) done(); return; }
     busy = true;
-    var from = pos, t0 = null, dur = 300 + 1400 * Math.abs(to - from);
+    var from = pos, t0 = null, dur = 350 + 1300 * Math.abs(to - from);
     function step(now) {
       if (t0 === null) t0 = now;
       var k = Math.min(1, (now - t0) / dur);
-      var e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+      var e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
       pos = from + (to - from) * e; render();
       if (k < 1) requestAnimationFrame(step); else { busy = false; if (done) done(); }
     }
@@ -268,37 +267,70 @@
 
   function toggle() { if (!busy) animateTo(pos > 0.5 ? 0 : 1); }
 
-  // muis of vinger naar de dichtstbijzijnde plek op de rits
+  // Waar staat de trekker op het scherm voor elke stand van de rits?
+  // De binder schuift en krimpt terwijl hij opengaat; dat rekenen we hier mee,
+  // zodat de trekker exact onder de muis blijft en niet gaat trillen.
+  var art = binder.parentElement;
+  function kOf(t) { var k = Math.max(0, Math.min(1, (t - OPEN_FROM) / (1 - OPEN_FROM))); return k * k * (3 - 2 * k); }
+  var shown = [];
+  for (i = 0; i <= N; i++) {
+    var kk = kOf(i / N), sc = 1 - 0.16 * kk;
+    shown.push({ x: 210 + (samples[i].x - 210) * sc + 0.13 * 420 * kk, y: 250 + (samples[i].y - 250) * sc });
+  }
+
   function nearest(clientX, clientY) {
-    var m = svg.getScreenCTM();
-    if (!m) return pos;
-    var pt = svg.createSVGPoint(); pt.x = clientX; pt.y = clientY;
-    var loc = pt.matrixTransform(m.inverse());
-    var cur = Math.round(pos * N), best = cur, bd = 1e12;
-    var lo = Math.max(0, cur - 40), hi = Math.min(N, cur + 40);   // geen sprongen over de binder heen
+    var r = art.getBoundingClientRect();
+    var w = binder.offsetWidth, h = binder.offsetHeight;
+    if (!w || !h) return pos;
+    var lx = (clientX - r.left - art.clientLeft - binder.offsetLeft) / w * 420;
+    var ly = (clientY - r.top - art.clientTop - binder.offsetTop) / h * 500;
+    var cur = Math.round(target * N), best = cur, bd = 1e12;
+    var lo = Math.max(0, cur - 36), hi = Math.min(N, cur + 36);   // geen sprongen over de binder heen
     for (var j = lo; j <= hi; j++) {
-      var dx = samples[j].x - loc.x, dy = samples[j].y - loc.y, d2 = dx * dx + dy * dy;
+      var dx = shown[j].x - lx, dy = shown[j].y - ly, d2 = dx * dx + dy * dy;
       if (d2 < bd) { bd = d2; best = j; }
     }
-    return best / N;
+    // verfijnen tussen twee meetpunten, zodat de beweging traploos is
+    var f = best;
+    [[best - 1, best], [best, best + 1]].forEach(function (seg) {
+      if (seg[0] < 0 || seg[1] > N) return;
+      var A = shown[seg[0]], B = shown[seg[1]];
+      var vx = B.x - A.x, vy = B.y - A.y, L2 = vx * vx + vy * vy;
+      if (!L2) return;
+      var u = Math.max(0, Math.min(1, ((lx - A.x) * vx + (ly - A.y) * vy) / L2));
+      var px = A.x + vx * u - lx, py = A.y + vy * u - ly, d2 = px * px + py * py;
+      if (d2 < bd) { bd = d2; f = seg[0] + u; }
+    });
+    return f / N;
+  }
+
+  var target = 0, raf = 0;
+  function follow() {                      // zacht naar de muis toe bewegen
+    raf = 0;
+    var d = target - pos;
+    if (Math.abs(d) < 0.0004) { pos = target; render(); if (dragging) raf = requestAnimationFrame(follow); return; }
+    pos += d * 0.38; render();
+    raf = requestAnimationFrame(follow);
   }
 
   pull.addEventListener('pointerdown', function (e) {
     if (busy) return;
-    dragging = true; moved = false; startX = e.clientX; startY = e.clientY;
+    dragging = true; moved = false; startX = e.clientX; startY = e.clientY; target = pos;
     binder.classList.add('dragging');
     try { pull.setPointerCapture(e.pointerId); } catch (err) {}
     e.preventDefault();
   });
   pull.addEventListener('pointermove', function (e) {
     if (!dragging) return;
-    if (!moved && Math.abs(e.clientX - startX) + Math.abs(e.clientY - startY) < 5) return;
+    if (!moved && Math.abs(e.clientX - startX) + Math.abs(e.clientY - startY) < 4) return;
     moved = true;
-    pos = nearest(e.clientX, e.clientY); render();
+    target = reduce ? (pos = nearest(e.clientX, e.clientY)) : nearest(e.clientX, e.clientY);
+    if (reduce) render(); else if (!raf) raf = requestAnimationFrame(follow);
   });
   function end() {
     if (!dragging) return;
     dragging = false; binder.classList.remove('dragging');
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
     if (!moved) { toggle(); return; }
     animateTo(pos > 0.5 ? 1 : 0);          // loslaten: klikt vast in open of dicht
   }
