@@ -122,6 +122,9 @@ section{padding:clamp(64px,9vw,120px) 0}
   transition-delay:calc(var(--i) * 60ms);position:relative}
 .pocket::after{content:"";position:absolute;inset:9%;border:1.5px solid rgba(242,239,233,.16);opacity:0;transition:opacity .6s .5s}
 .pocket.hot{background:linear-gradient(160deg,#FC4C02,#c23a00);border-color:var(--orange)}
+button.pocket{padding:0;font:inherit;color:inherit;cursor:pointer;display:block;width:100%}
+button.pocket:hover{filter:brightness(1.12)}
+button.pocket:focus-visible{outline:2px solid var(--chalk);outline-offset:3px}
 .pockets.in .pocket{clip-path:polygon(50% 0,100% 0,100% 100%,50% 100%,0 100%,0 0);transform:none}
 .pockets.in .pocket::after{opacity:1}
 .feats{display:grid;gap:14px}

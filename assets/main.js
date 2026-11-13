@@ -25,6 +25,16 @@
     if (io) io.observe(el); else el.classList.add('in');
   });
 
+  /* ---------- Oranje vak: animatie van schubben naar vakken opnieuw afspelen ---------- */
+  var replay = document.getElementById('replayPockets');
+  if (replay) {
+    replay.addEventListener('click', function () {
+      var grid = replay.parentElement;
+      grid.classList.remove('in');           // terug naar schubben
+      setTimeout(function () { grid.classList.add('in'); }, reduce ? 0 : 1100);
+    });
+  }
+
   /* ---------- De pangolin die zich oprolt ---------- */
   var canvas = document.getElementById('pangolin');
   if (!canvas) return;
