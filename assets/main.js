@@ -215,7 +215,7 @@
   }
 
   // ---- verloop van de animatie ----
-  var ROLL_END = 2.5;
+  var ROLL_END = -2.6;   // negatief = voorwaarts rollen (kop wijst naar links)
   var st = { c: 0, from: 0, to: 0, t0: 0, dur: 1.3, start: null, settled: -1, auto: false };
 
   function frame(now) {
@@ -230,11 +230,11 @@
     var tau = st.settled < 0 ? 0 : now - st.settled;
     var c = st.c;
     var wobble = (st.to === 1 && st.settled >= 0) ? Math.exp(-3.2 * tau) * Math.sin(tau * 8.5) : 0;   // uitrollen en tot rust komen
-    var roll = c * ROLL_END + wobble * 0.22 + Math.sin(now * 0.9) * 0.015 * c;
+    var roll = sm((c - 0.4) / 0.6) * ROLL_END - wobble * 0.22 + Math.sin(now * 0.9) * 0.015 * c;   // eerst oprollen, dan pas doorrollen
     var bounce = (st.to === 1 && st.settled >= 0) ? Math.abs(Math.sin(tau * 7)) * Math.exp(-4.5 * tau) * 12 : 0;
     var walking = (1 - enter) > 0.02 ? 1 : 0;
     draw(c, roll, {
-      x: (1 - enter) * 0.62,
+      x: (1 - enter) * 0.62 - sm((c - 0.4) / 0.6) * 0.07 + wobble * 0.012,   // rolt een stukje naar voren
       walkPhase: now * 9, walk: walking * (1 - c),
       bounce: bounce + Math.sin(now * 2) * 1.2 * (1 - c),
       shield: (st.to === 1 && st.settled >= 0) ? Math.min(1, tau / 0.8) : 0,
