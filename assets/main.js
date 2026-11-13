@@ -216,3 +216,62 @@
     requestAnimationFrame(frame);
   }
 })();
+
+/* ---------- De binder: rits open, kaft open ---------- */
+(function () {
+  'use strict';
+  var binder = document.getElementById('binder3d');
+  var path = document.getElementById('zipPath');
+  var pull = document.getElementById('zipPull');
+  var btn = document.getElementById('zipBtn');
+  if (!binder || !path || !pull || !btn) return;
+
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var len = path.getTotalLength();
+  var pos = 0;        // 0 = rits dicht, 1 = rits open
+  var open = false, busy = false;
+
+  function place(t) {
+    var d = t * len;
+    var p = path.getPointAtLength(d);
+    var q = path.getPointAtLength(Math.min(len, d + 1)), o = path.getPointAtLength(Math.max(0, d - 1));
+    var ang = Math.atan2(q.y - o.y, q.x - o.x) * 180 / Math.PI;
+    pull.setAttribute('transform', 'translate(' + p.x.toFixed(1) + ' ' + p.y.toFixed(1) + ') rotate(' + ang.toFixed(1) + ')');
+  }
+
+  function slide(to, done) {
+    if (reduce) { pos = to; place(pos); done(); return; }
+    var from = pos, t0 = null, dur = 1000;
+    function step(now) {
+      if (t0 === null) t0 = now;
+      var k = Math.min(1, (now - t0) / dur);
+      var e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+      pos = from + (to - from) * e; place(pos);
+      if (k < 1) requestAnimationFrame(step); else done();
+    }
+    requestAnimationFrame(step);
+  }
+
+  function toggle() {
+    if (busy) return;
+    busy = true;
+    if (!open) {
+      slide(1, function () {
+        binder.classList.add('open'); open = true; busy = false;
+        btn.textContent = 'Rits dicht'; btn.setAttribute('aria-pressed', 'true');
+      });
+    } else {
+      binder.classList.remove('open');
+      setTimeout(function () {
+        slide(0, function () {
+          open = false; busy = false;
+          btn.textContent = 'Rits open'; btn.setAttribute('aria-pressed', 'false');
+        });
+      }, reduce ? 0 : 900);
+    }
+  }
+
+  place(0);
+  btn.addEventListener('click', toggle);
+  pull.addEventListener('click', toggle);
+})();
